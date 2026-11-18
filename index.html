@@ -1558,6 +1558,9 @@
       { min: 0,  max: 24.99, label: 'Needs Intensive Intervention' }
     ];
 
+    // PASTE YOUR DEPLOYED APPS SCRIPT WEB APP URL ONCE HERE:
+    const DEFAULT_GSHEET_URL = 'https://script.google.com/macros/s/AKfycbw2ozWbBiGzhSrXaYTAo36PNNyljhfuQghnsXhEGXgBvD21ivP_lnyugA-l2E8e6a_j/exec';
+
     let appState = {
       records: [],
       schoolYears: ['2026-2027'],
@@ -1567,14 +1570,20 @@
       classifications: JSON.parse(JSON.stringify(DEFAULT_CLASSIFICATIONS)),
       targetMPS: 75.00,
       user: { name: 'Admin', role: 'School Administrator' },
-      logs: []
+      logs: [],
+      gsheetUrl: DEFAULT_GSHEET_URL,
+      gsheetAutoSync: true
     };
 
-    let charts = {};
 
     /* ==========================================================================
        2. INITIALIZATION & PERSISTENCE
     ========================================================================== */
+    let charts = {};
+    let autoSyncInterval = null;
+    let isSyncing = false;
+    
+    
     function initApp() {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -1584,10 +1593,12 @@
         } catch (e) {
           console.error('Failed to parse saved state:', e);
         }
-      } else {
-        // First run: populate clean demonstration data so all analytics work immediately
-        loadSampleData(false);
-        logActivity('System Initialized', 'Loaded initial demonstration dataset for Claudio Sandoval South Elementary School.');
+      } 
+
+// Force the hardcoded URL so old localStorage never blocks it
+      if (DEFAULT_GSHEET_URL && DEFAULT_GSHEET_URL.startsWith('https://script.google.com/')) {
+        appState.gsheetUrl = DEFAULT_GSHEET_URL;
+        appState.gsheetAutoSync = true;
       }
 
       setupNavigation();
@@ -1596,11 +1607,43 @@
       document.getElementById('encSY').value = appState.activeSchoolYear;
       document.getElementById('settingTargetMPS').value = appState.targetMPS.toFixed(2);
       updateUserBadgeUI();
+      updateGSheetBadge();
       refreshAllViews();
+    
+
+// Automatically sync with Google Sheets on startup & periodically
+      if (appState.gsheetUrl) {
+        pullFromGoogleSheets(true); // Silent automatic pull on load
+        startAutoSyncLoop();
+      } else if (appState.records.length === 0) {
+        loadSampleData(false);
+      }
     }
 
-    function saveState() {
+    function startAutoSyncLoop() {
+      if (autoSyncInterval) clearInterval(autoSyncInterval);
+
+      // Pull updates from Google Sheets every 30 seconds in the background
+      autoSyncInterval = setInterval(() => {
+        if (!document.hidden && appState.gsheetUrl && !isSyncing) {
+          pullFromGoogleSheets(true);
+        }
+      }, 30000);
+
+      // Immediately pull fresh data when switching back to this browser tab
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && appState.gsheetUrl && !isSyncing) {
+          pullFromGoogleSheets(true);
+        }
+      });
+    }
+
+// Unified saveState (remove the earlier duplicate saveState definition)
+    function saveState(skipCloud = false) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+      if (!skipCloud && appState.gsheetUrl && appState.gsheetAutoSync) {
+        pushToGoogleSheets(true);
+      }
     }
 
     function logActivity(action, details) {
@@ -3646,12 +3689,7 @@
 
     window.addEventListener('DOMContentLoaded', initApp);
 
-function saveState(skipCloud = false) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
-      if (!skipCloud && appState.gsheetUrl && appState.gsheetAutoSync) {
-        pushToGoogleSheets(true);
-      }
-    }
+
 
 
     /* ==========================================================================
@@ -3689,37 +3727,48 @@ function saveState(skipCloud = false) {
       }
     }
 
-    async function pullFromGoogleSheets() {
+    async function pullFromGoogleSheets(silent = false) {
       if (!appState.gsheetUrl) {
-        openGSheetConfigModal();
+        if (!silent) openGSheetConfigModal();
         return;
       }
+      if (isSyncing) return;
+      isSyncing = true;
+
       const badge = document.getElementById('gsheetStatusBadge');
       badge.className = 'badge badge-info';
-      badge.textContent = '⏳ Syncing from Sheet...';
+      badge.textContent = '⏳ Syncing...';
 
       try {
-        const res = await fetch(appState.gsheetUrl);
+        const fetchUrl = `${appState.gsheetUrl}?t=${Date.now()}`;
+        const res = await fetch(fetchUrl);
         const data = await res.json();
+
         if (data.status === 'success') {
-          // Keep local sample records only if Sheet is currently empty
-          if (data.records.length > 0) {
-            appState.records = data.records;
-          }
+          appState.records = data.records || [];
           saveState(true);
           populateSchoolYearSelectors();
           populateSubjectSelectors();
           refreshAllViews();
+
+          const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           badge.className = 'badge badge-up';
-          badge.textContent = `☁️ Synced (${data.records.length} rows)`;
-          showToast(`Pulled ${data.records.length} record(s) from Google Sheets.`, 'success');
+          badge.textContent = `☁️ Auto-Synced (${data.records.length} rows • ${timeNow})`;
+
+          if (!silent) {
+            showToast(`Pulled ${data.records.length} record(s) from Google Sheets.`, 'success');
+          }
         } else {
           throw new Error(data.message || 'Failed to read sheet');
         }
       } catch (err) {
         badge.className = 'badge badge-down';
         badge.textContent = '⚠️ Sync Error';
-        showToast('Error pulling from Google Sheets: ' + err.message, 'error');
+        if (!silent) {
+          showToast('Error pulling from Google Sheets: ' + err.message, 'error');
+        }
+      } finally {
+        isSyncing = false;
       }
     }
 
@@ -3728,11 +3777,12 @@ function saveState(skipCloud = false) {
         if (!silent) openGSheetConfigModal();
         return;
       }
+      isSyncing = true;
+
       const badge = document.getElementById('gsheetStatusBadge');
       badge.className = 'badge badge-info';
-      badge.textContent = '⏳ Pushing to Sheet...';
+      badge.textContent = '⏳ Saving to Sheet...';
 
-      // Exclude demo sample records from overwriting your real Google Sheet
       const realRecords = appState.records.filter(r => !r.isSample);
 
       try {
@@ -3743,18 +3793,155 @@ function saveState(skipCloud = false) {
         });
         const data = await res.json();
         if (data.status === 'success') {
+          const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           badge.className = 'badge badge-up';
-          badge.textContent = `☁️ Synced (${data.syncedCount} rows)`;
-          if (!silent) showToast(`Successfully synced ${data.syncedCount} record(s) to Google Sheets!`, 'success');
+          badge.textContent = `☁️ Auto-Synced (${data.syncedCount} rows • ${timeNow})`;
+          if (!silent) {
+            showToast(`Successfully synced ${data.syncedCount} record(s) to Google Sheets!`, 'success');
+          }
         } else {
           throw new Error(data.message || 'Push failed');
         }
       } catch (err) {
         badge.className = 'badge badge-down';
         badge.textContent = '⚠️ Sync Error';
-        if (!silent) showToast('Error pushing to Google Sheets: ' + err.message, 'error');
+        if (!silent) {
+          showToast('Error pushing to Google Sheets: ' + err.message, 'error');
+        }
+      } finally {
+        isSyncing = false;
       }
     }
+
+    async function pushToGoogleSheets(silent = false) {
+      if (!appState.gsheetUrl) {
+        if (!silent) openGSheetConfigModal();
+        return;
+      }
+      isSyncing = true;
+
+      const badge = document.getElementById('gsheetStatusBadge');
+      badge.className = 'badge badge-info';
+      badge.textContent = '⏳ Saving to Sheet...';
+
+      const realRecords = appState.records.filter(r => !r.isSample);
+
+      try {
+        const res = await fetch(appState.gsheetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'syncAll', records: realRecords })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          badge.className = 'badge badge-up';
+          badge.textContent = `☁️ Auto-Synced (${data.syncedCount} rows • ${timeNow})`;
+          if (!silent) {
+            showToast(`Successfully synced ${data.syncedCount} record(s) to Google Sheets!`, 'success');
+          }
+        } else {
+          throw new Error(data.message || 'Push failed');
+        }
+      } catch (err) {
+        badge.className = 'badge badge-down';
+        badge.textContent = '⚠️ Sync Error';
+        if (!silent) {
+          showToast('Error pushing to Google Sheets: ' + err.message, 'error');
+        }
+      } finally {
+        isSyncing = false;
+      }
+    }
+
+const SHEET_NAME = 'Records'; // Change if your tab name differs
+
+function doGet(e) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME) || ss.getSheets()[0];
+  const rows = sheet.getDataRange().getValues();
+  const records = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r[1] && !r[2]) continue; // Skip blank rows
+
+    const enrolled = r[5] !== '' ? Number(r[5]) : null;
+    const assessed = r[6] !== '' ? Number(r[6]) : null;
+    const items = r[7] !== '' ? Number(r[7]) : null;
+    const correct = r[8] !== '' ? Number(r[8]) : null;
+
+    // Auto-calculate MPS if entered directly in Google Sheets without MPS column filled
+    let mps = r[9] !== '' ? Number(r[9]) : null;
+    let isDirectMPS = true;
+    if (assessed > 0 && items > 0 && correct !== null && !isNaN(correct)) {
+      mps = (correct / (assessed * items)) * 100;
+      isDirectMPS = false;
+    }
+
+    if (mps === null || isNaN(mps)) continue;
+
+    records.push({
+      id: r[0] ? String(r[0]) : 'GS-' + (i + 1),
+      schoolYear: String(r[1]).trim(),
+      gradeLevel: String(r[2]).trim(),
+      subjectArea: String(r[3]).trim(),
+      assessmentPeriod: String(r[4]).trim(),
+      enrolledLearners: isDirectMPS ? null : enrolled,
+      assessedLearners: isDirectMPS ? null : assessed,
+      totalItems: isDirectMPS ? null : items,
+      totalCorrect: isDirectMPS ? null : correct,
+      mps: mps,
+      isDirectMPS: isDirectMPS,
+      dateEncoded: r[10] ? String(r[10]) : new Date().toISOString(),
+      lastModified: r[11] ? String(r[11]) : new Date().toISOString(),
+      isSample: false
+    });
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'success', records: records }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  const payload = JSON.parse(e.postData.contents);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME) || ss.getSheets()[0];
+
+  if (payload.action === 'syncAll') {
+    const headers = [
+      'ID', 'School Year', 'Grade Level', 'Subject Area', 'Assessment Period',
+      'Enrolled', 'Assessed', 'Total Items', 'Total Correct', 'MPS (%)',
+      'Date Encoded', 'Last Modified'
+    ];
+    sheet.clearContents();
+    sheet.appendRow(headers);
+
+    const rows = (payload.records || []).map(rec => [
+      rec.id,
+      rec.schoolYear,
+      rec.gradeLevel,
+      rec.subjectArea,
+      rec.assessmentPeriod,
+      rec.enrolledLearners ?? '',
+      rec.assessedLearners ?? '',
+      rec.totalItems ?? '',
+      rec.totalCorrect ?? '',
+      Number(rec.mps).toFixed(2),
+      rec.dateEncoded,
+      rec.lastModified
+    ]);
+
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+    }
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'success', syncedCount: rows.length }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
 
 
 
