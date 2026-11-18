@@ -11,7 +11,7 @@
       --navy-dark: #0b1f3a;
       --navy-primary: #13315c;
       --navy-light: #1e498a;
-      --gold-accent: #d4a017;
+      --gold-accent: #026482;
       --gold-light: #f6e7b8;
       --bg-body: #f3f6fa;
       --bg-card: #ffffff;
@@ -678,6 +678,23 @@
       .main-wrapper { margin-left: 0; }
       .mobile-toggle { display: inline-block; }
     }
+
+.brand-seal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.brand-seal img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain; /* Keeps the full logo visible without cropping */
+}
+
+
+
+
   </style>
 </head>
 <body>
@@ -685,7 +702,9 @@
   <!-- SIDEBAR -->
   <aside class="sidebar" id="sidebar">
     <div class="brand-box">
-      <div class="brand-seal">CSSES</div>
+      <div class="brand-seal">
+        <img src="/CSSES Enhanced3.png" alt="CSSES Logo">
+      </div>
       <div class="brand-text">
         <h1>Claudio Sandoval South Elem. School</h1>
         <p>MPS Consolidation & Monitoring</p>
@@ -907,7 +926,7 @@
             <div class="form-grid">
               <div class="form-group">
                 <label for="encSY">School Year *</label>
-                <input type="text" id="encSY" placeholder="e.g., 2025-2026" required />
+                <input type="text" id="encSY" placeholder="e.g., 2026-2027" required />
               </div>
 
               <div class="form-group">
@@ -1541,8 +1560,8 @@
 
     let appState = {
       records: [],
-      schoolYears: ['2025-2026', '2024-2025'],
-      activeSchoolYear: '2025-2026',
+      schoolYears: ['2026-2027'],
+      activeSchoolYear: '2026-2027',
       masterSubjects: [...DEFAULT_MASTER_SUBJECTS],
       gradeSubjects: JSON.parse(JSON.stringify(DEFAULT_GRADE_SUBJECTS)),
       classifications: JSON.parse(JSON.stringify(DEFAULT_CLASSIFICATIONS)),
